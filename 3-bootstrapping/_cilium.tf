@@ -22,6 +22,22 @@ variable "use_cilium" {
   default     = false
   description = "Whether to install use_karpenter."
 }
+variable "use_cilium_eni" {
+  type        = bool
+  default     = false
+  description = "Whether to install cilium in eni mode."
+}
+variable "use_cilium_service_mesh" {
+  type        = bool
+  default     = false
+  description = "Whether to install cilium in eni mode with service mesh."
+}
+
+variable "use_cilium_aws_chaining" {
+  type        = bool
+  default     = false
+  description = "Whether to cilium in aws chaining mode."
+}
 variable "use_cilium_helper_cron" {
   type        = bool
   default     = false
@@ -101,6 +117,7 @@ module "cilium_operator_role" {
   }
   depends_on = [ aws_iam_policy.cilium_operator_policy ]
 }
+
 resource "null_resource" "patch_out_aws_cni" {
     count = var.remove_aws_cni && var.use_cilium ? 1 : 0
     provisioner "local-exec" {
@@ -136,7 +153,7 @@ resource "time_sleep" "cilium_wait" {
 
 
 resource "helm_release" "cilium_cni" {
-  count = var.use_cilium ? 1 : 0
+  count = var.use_cilium && var.use_cilium_eni ? 1 : 0
   
   name       = "cilium-${local.cilium_chart_version}"
   repository = "https://helm.cilium.io/"
@@ -164,6 +181,8 @@ resource "helm_release" "cilium_cni" {
     null_resource.patch_out_kube_proxy
    ]
 }
+
+
 resource "null_resource" "restart_existing_pods" {
   count = var.use_cilium ? 1 : 0
   provisioner "local-exec" {
