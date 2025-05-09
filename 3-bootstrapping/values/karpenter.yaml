@@ -1,0 +1,31 @@
+# Karpenter Helm values
+
+controller:
+  resources:
+    requests:
+      cpu: 0.5
+      memory: 1Gi
+    limits:
+      cpu: 1
+      memory: 2Gi
+
+nodeSelector:
+  dedicated: bootstrap
+
+tolerations:
+  - effect: NoSchedule
+    key: CriticalAddonsOnly
+    value: "true"
+
+settings:
+  clusterName: "${cluster_name}"
+  interruptionQueue: "${interruption_queue}"
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: "${controller_iam_role_arn}"
+    eks.amazonaws.com/sts-regional-endpoints: "true"
+logLevel: info
+
+podDisruptionBudget:
+  maxUnavailable: 1

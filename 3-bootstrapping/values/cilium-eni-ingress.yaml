@@ -1,0 +1,175 @@
+# ################################################################################
+# # Cilium Helm Chart Values
+# ################################################################################
+# ## For AWS EKS with Cilium as a replacement for the AWS VPC CNI, kube-proxy, and CoreDNS
+# ## Ref https://docs.cilium.io/en/stable/installation/k8s-install-helm/
+## https://github.com/cilium/cilium/tree/v1.16.9/install/kubernetes/cilium
+cluster:
+  name: ${cluster_name}
+eni:
+  enabled: true
+ipam:
+  # -- Configure IP Address Management mode.
+  # ref: 
+  #   - https://docs.cilium.io/en/stable/network/concepts/ipam/
+  #   - https://docs.cilium.io/en/stable/network/concepts/ipam/eni/
+  mode: eni
+
+auto-create-cilium-node-resource: "true"
+egressMasqueradeInterfaces: eth+
+routingMode: native
+
+
+### Setup the operator to manage ENIs instead of the vpc-eni with irsa
+serviceAccounts:
+  operator:
+    name: cilium-operator
+    annotations:
+      eks.amazonaws.com/role-arn: ${irsa_oidc_provider_arn}
+
+### needs to be passed in 
+operator:
+  replicas: 1
+  extraEnv:
+    - name: AWS_REGION
+      value: ${AWS_REGION}
+
+# KubeProxy replacement with eBPF
+kubeProxyReplacement: true
+k8sServiceHost: ${eks_api_endpoint}
+k8sServicePort: ${eks_api_port}   
+
+
+# ## Service Mesh Setup ー This will automatically set enable-envoy-config as well.
+# ingressController:
+#   enabled: true
+#   loadbalancerMode: shared
+#   service:
+#    annotations:
+#       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+#       service.beta.kubernetes.io/aws-load-balancer-type: external
+#       service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "300"
+#       service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+#       service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: "preserve_client_ip.enabled=true"
+
+debug:
+  enabled: true
+  verbose: "datapath flow envoy"
+
+## Enable Hubble for observability
+hubble:
+  enabled: true
+  tls:
+    auto:
+      enabled: true
+  metrics:
+    enabled:
+    - dns
+    - drop
+    - tcp
+    - flow
+    - icmp
+    - http
+
+  relay:
+    enabled: true
+    service:
+      type: NodePort
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: bootstrap
+        effect: NoSchedule
+      - key: CriticalAddonsOnly
+        value: "true"
+        effect: NoSchedule
+
+  ui:
+    enabled: true
+    service:
+      type: NodePort
+
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: bootstrap
+        effect: NoSchedule
+      - key: CriticalAddonsOnly
+        value: "true"
+        effect: NoSchedule
+
+
+
+
+
+# # # Ensure proper routing
+# # hostLegacyRouting: false
+# # autoDirectNodeRoutes: true
+
+# # ### Potential for aws lattice
+# # gatewayAPI:
+# #   enabled: false
+
+# # # -- Configure the eBPF-based ip-masq-agent
+# # ipMasqAgent:
+# #   enabled: false
+
+# ipv4:
+#   # -- Enable IPv4 support.
+#   enabled: true
+
+# # bpf:
+# #   masquerade: false
+
+
+
+# # # Security settings
+# # encryption:
+# #   enabled: false # Set to true if you want to enable encryption
+# #   nodeEncryption: false
+
+# # # # CNI configuration
+# # cni:
+# #   install: false
+# #   chainingMode: "aws-cni" # We're replacing AWS VPC CNI entirely
+
+# # # Service load balancing
+# # loadBalancer:
+# #   algorithm: "random"
+# #   mode: "snat"
+# #   l7: 
+# #     backend: envoy
+
+
+# # Tolerations to schedule on bootstrap nodes
+# tolerations:
+#   - key: dedicated
+#     operator: Equal
+#     value: bootstrap
+#     effect: NoSchedule
+#   - key: CriticalAddonsOnly
+#     value: "true"
+#     effect: NoSchedule
+#   - key: node.kubernetes.io/not-ready
+#     effect: NoSchedule
+#   - key: node.cilium.io/agent-not-ready
+#     effect: NoSchedule
+#   - key: node.cilium.io/agent-not-ready
+#     effect: NoExecute
+# shared-secrets:
+#   tolerations:
+#     - key: dedicated
+#       value: bootstrap
+#       effect: NoSchedule
+#     - key: CriticalAddonsOnly
+#       value: "true"
+#       effect: NoSchedule
+
+# upgradeCheck:
+#   tolerations:
+#     - key: dedicated
+#       value: bootstrap
+#       effect: NoSchedule
+#     - key: CriticalAddonsOnly
+#       value: "true"
+#       effect: NoSchedule

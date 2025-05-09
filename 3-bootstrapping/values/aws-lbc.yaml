@@ -1,0 +1,18 @@
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: "${irsa_oidc_provider_arn}"
+
+clusterName: "${cluster_name}"
+
+vpcId: "${aws_vpc_id}"
+region: "${aws_region}"
+
+default-ssl-policy: "${default_ssl_policy}"
+
+# nodeSelector:
+#   dedicated: bootstrap
+
+tolerations:
+- key: CriticalAddonsOnly
+  value: "true"
+  effect: NoSchedule

@@ -1,0 +1,171 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cilium-taint-manager
+  namespace: kube-system
+spec:
+  schedule: "*/5 * * * *"  # Run every 5 minutes
+  concurrencyPolicy: Forbid  # Don't run if previous job is still running
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: cilium-taint-manager
+          tolerations:
+          - key: dedicated
+            value: bootstrap
+            effect: NoSchedule
+          - key: CriticalAddonsOnly
+            value: "true"
+            effect: NoSchedule
+          - key: node.cilium.io/agent-not-ready
+            effect: NoSchedule
+          containers:
+          - name: taint-manager
+            image: bitnami/kubectl:latest
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              #!/bin/bash
+              set -e
+              
+              echo "Starting Cilium taint management check..."
+              
+              # Check if there's an active rollout
+              ROLLOUT_STATUS=$(kubectl rollout status ds/cilium -n kube-system --timeout=5s 2>/dev/null || echo "not-rolling")
+              
+              if [[ "$ROLLOUT_STATUS" == *"Waiting for"* ]] || [[ "$ROLLOUT_STATUS" == "not-rolling" ]]; then
+                echo "Cilium rollout in progress or pending. Checking for stuck nodes..."
+                
+                # Get nodes with the cilium agent-not-ready taint
+                TAINTED_NODES=$(kubectl get nodes -o json | jq -r '.items[] | select(.spec.taints[]? | select(.key=="node.cilium.io/agent-not-ready")) | .metadata.name')
+                
+                if [ -z "$TAINTED_NODES" ]; then
+                  echo "No nodes with cilium agent-not-ready taint found."
+                  exit 0
+                fi
+                
+                for NODE in $TAINTED_NODES; do
+                  echo "Checking node: $NODE"
+                  
+                  # Check if a Cilium pod exists on this node
+                  POD_INFO=$(kubectl get pods -n kube-system -l k8s-app=cilium --field-selector spec.nodeName=$NODE -o json 2>/dev/null)
+                  POD_COUNT=$(echo "$POD_INFO" | jq '.items | length')
+                  
+                  if [ $POD_COUNT -gt 0 ]; then
+                    POD_STATUS=$(echo "$POD_INFO" | jq -r '.items[0].status.phase')
+                    POD_AGE=$(echo "$POD_INFO" | jq -r '.items[0].metadata.creationTimestamp')
+                    
+                    # Convert to seconds and check if older than 5 minutes
+                    CURRENT_TIME=$(date +%s)
+                    POD_TIME=$(date -d "$POD_AGE" +%s)
+                    AGE_SECONDS=$((CURRENT_TIME - POD_TIME))
+                    
+                    echo "Pod status: $POD_STATUS, Age: $AGE_SECONDS seconds"
+                    
+                    if [ $AGE_SECONDS -gt 300 ] && [ "$POD_STATUS" != "Running" ]; then
+                      echo "Pod on $NODE stuck for more than 5 minutes. Removing taint..."
+                      kubectl taint nodes $NODE node.cilium.io/agent-not-ready:NoSchedule- || echo "Failed to remove taint from $NODE"
+                    else
+                      echo "Pod on $NODE is either Running or not old enough to remove taint."
+                    fi
+                  else
+                    echo "No Cilium pod found on node $NODE. Checking for scheduling issues..."
+                    
+                    # Check if there are any pending pods that can't be scheduled
+                    PENDING_PODS=$(kubectl get pods -n kube-system -l k8s-app=cilium -o json | jq -r '.items[] | select(.status.phase=="Pending") | .metadata.name')
+                    
+                    if [ -n "$PENDING_PODS" ]; then
+                      echo "Found pending Cilium pods. Checking for NodeAffinity issues..."
+                      
+                      # Check events for scheduling failures
+                      SCHEDULING_ISSUES=$(kubectl get events -n kube-system --field-selector type=Warning,reason=FailedScheduling --sort-by='.lastTimestamp' | grep -i "NodeAffinity\|untolerated taint" | head -5)
+                      
+                      if [ -n "$SCHEDULING_ISSUES" ]; then
+                        echo "Detected scheduling issues:"
+                        echo "$SCHEDULING_ISSUES"
+                        
+                        # Check how long this node has had the taint
+                        NODE_INFO=$(kubectl get node $NODE -o json)
+                        TAINT_TIME=$(echo "$NODE_INFO" | jq -r '.spec.taints[] | select(.key=="node.cilium.io/agent-not-ready") | .timeAdded // empty')
+                        
+                        if [ -z "$TAINT_TIME" ]; then
+                          # If no timeAdded, check node creation time as fallback
+                          TAINT_TIME=$(echo "$NODE_INFO" | jq -r '.metadata.creationTimestamp')
+                        fi
+                        
+                        if [ -n "$TAINT_TIME" ]; then
+                          TAINT_EPOCH=$(date -d "$TAINT_TIME" +%s 2>/dev/null || date +%s)
+                          CURRENT_EPOCH=$(date +%s)
+                          TAINT_AGE=$((CURRENT_EPOCH - TAINT_EPOCH))
+                          
+                          echo "Taint age on $NODE: $TAINT_AGE seconds"
+                          
+                          # If taint has been present for more than 5 minutes with scheduling issues
+                          if [ $TAINT_AGE -gt 300 ]; then
+                            echo "Node $NODE has had taint for more than 5 minutes with scheduling issues. Removing taint..."
+                            kubectl taint nodes $NODE node.cilium.io/agent-not-ready:NoSchedule- || echo "Failed to remove taint from $NODE"
+                          else
+                            echo "Taint on $NODE is not old enough to remove yet."
+                          fi
+                        else
+                          echo "Could not determine taint age. Skipping $NODE for safety."
+                        fi
+                      else
+                        echo "No clear scheduling issues detected. Skipping $NODE."
+                      fi
+                    else
+                      echo "No pending Cilium pods found. Skipping $NODE."
+                    fi
+                  fi
+                done
+              else
+                echo "No active Cilium rollout detected. Nothing to do."
+              fi
+              
+              echo "Cilium taint management check completed."
+          restartPolicy: OnFailure
+          # Set a timeout for the job
+          activeDeadlineSeconds: 300  # 5 minute timeout
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cilium-taint-manager
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets/status"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cilium-taint-manager
+subjects:
+- kind: ServiceAccount
+  name: cilium-taint-manager
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: cilium-taint-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cilium-taint-manager
+  namespace: kube-system

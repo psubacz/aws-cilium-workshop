@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-productpage
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: k8s-ingressn-ingressn-04aafce38a-918b55bbd4adf75a.elb.us-east-2.amazonaws.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: productpage
+            port:
+              number: 9080

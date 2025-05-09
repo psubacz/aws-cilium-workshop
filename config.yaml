@@ -1,0 +1,19 @@
+# Configuration file for AWS and Terraform settings
+# Place this file in the same directory as the script or specify with --config
+
+# AWS configuration
+aws_profile: ""
+aws_region: "us-east-2"
+terraform_state_bucket: "cilium-workshop"
+
+# Terraform configuration
+init_reconfigure: true  # Set to true to use terraform init -reconfigure
+auto_reset: true        # Set to true to automatically reset provider files before each run
+backup_state: true      # Set to true to backup state files to S3 after apply/destroy
+
+# Global Terraform Vars
+vpc_name: starburst-test
+
+# SSH key paths (use absolute paths for reliability)
+ssh_private_key: "/home/coco/.ssh/psubacz"
+ssh_public_key: "/home/coco/.ssh/psubacz.pub"

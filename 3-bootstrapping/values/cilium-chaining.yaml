@@ -1,0 +1,184 @@
+################################################################################
+# Cilium Helm Chart Values
+################################################################################
+## For AWS EKS with Cilium as a replacement for the AWS VPC CNI, kube-proxy, and CoreDNS
+## Ref https://docs.cilium.io/en/stable/installation/k8s-install-helm/
+cluster:
+  name: "${cluster_name}"
+
+## CNI configuration
+# ref: 
+#   - https://docs.cilium.io/en/v1.16/installation/cni-chaining-aws-cni/
+# Note:
+#   - In chaining mode you get more pods per node, but lose out on some native routing
+cni:
+  install: true
+  chainingMode: "aws-cni" # We're replacing AWS VPC CNI entirely
+routingMode: native
+
+## Setup the operator to manage ENIs instead of the vpc-eni with irsa
+# ref: 
+#   - https://docs.cilium.io/en/stable/network/concepts/ipam/eni/
+# Note:
+#   - This probably isnt needed in chaining mode as the aws-cni is controller ipam
+serviceAccounts:
+  operator:
+    name: cilium-operator
+    annotations:
+      eks.amazonaws.com/role-arn: ${irsa_oidc_provider_arn}
+
+# Note:
+#   - This probably isnt needed in chaining mode as the aws-cni is 
+operator:
+  replicas: 1
+  extraEnv:
+    - name: AWS_REGION
+      value: ${AWS_REGION}
+
+## KubeProxy replacement with eBPF
+# ref: 
+#   - https://docs.cilium.io/en/v1.16/network/kubernetes/kubeproxy-free/#kubeproxy-free
+# Note:
+#   -  
+kubeProxyReplacement: true
+k8sServiceHost: ${eks_api_endpoint}
+k8sServicePort: ${eks_api_port}   
+
+## Service Mesh Setup ー
+# ref: 
+#   - https://docs.cilium.io/en/v1.16/network/servicemesh/
+#   - https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/annotations
+# Note:
+#   - This will automatically set enable-envoy-config as well.
+#   - The defualt loadbalancer should be of type network
+ingressController:
+  enabled: true
+  default: true
+  loadbalancerMode: shared
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing" # allow aws lbc to handle the infrastructure
+      # service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      # service.beta.kubernetes.io/aws-load-balancer-security-groups: sg-xxxx, nameOfSg1, nameOfSg2
+      service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-type: external
+      service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-connection-idle-timeout: "300"
+      service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-scheme: "internet-facing"
+      service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-nlb-target-type: "ip"
+      service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-target-group-attributes: "preserve_client_ip.enabled=true"
+    loadBalancerClass: service.k8s.aws/nlb
+    type: LoadBalancer
+  # hostNetwork:
+  #   enabled: true
+
+ipv4:
+  enabled: true
+
+bpf:
+  masquerade: true
+  
+
+# Ensure proper routing
+hostLegacyRouting: false
+# direct-routing-skip-unreachable cannot be enabled when auto-direct-node-routes is not enabled. 
+#   As if auto-direct-node-routes is then enabled, it may lead to unexpected behaviour causing network connectivity issues
+autoDirectNodeRoutes: true
+directRoutingSkipUnreachable: true 
+
+nodePort:
+  enabled: true
+
+# # Proxy settings
+l7Proxy: true # Layer 7 proxy for network policies
+
+# Security settings
+encryption:
+  enabled: false # Set to true if you want to enable encryption
+  nodeEncryption: false
+
+## Enable Hubble for observability
+# ref: 
+#   - 
+# Note:
+#   -
+hubble:
+  enabled: true
+  tls:
+    auto:
+      enabled: true
+  metrics:
+    enabled:
+    - dns
+    - drop
+    - tcp
+    - flow
+    - icmp
+    - http
+
+  relay:
+    enabled: true
+    service:
+      type: NodePort
+    tolerations:
+      - key: CriticalAddonsOnly
+        value: "true"
+        effect: NoSchedule
+
+  ui:
+    enabled: true
+    service:
+      type: NodePort
+
+    tolerations:
+      - key: CriticalAddonsOnly
+        value: "true"
+        effect: NoSchedule
+
+## Service Mesh Setup ー
+# ref: 
+#   - 
+# Note:
+#   -
+ipv4NativeRoutingCIDR: "0.0.0.0/0"
+
+## Enable Hubble for observability
+# ref: 
+#   - 
+# Note:
+#   - I dont actually think this is needed...
+nodeinit:
+  enabled: false # false when using bottlerocket
+  bootstrap-cilium: true
+  reconfigureKubelet: true
+  removeCbrBridge: false
+  restartPods: true
+
+# Tolerations to schedule on bootstrap nodes
+tolerations:
+  - operator: Exists
+  - key: CriticalAddonsOnly
+    value: "true"
+    effect: NoSchedule
+  - key: node.kubernetes.io/not-ready
+    effect: NoSchedule
+  - key: node.cilium.io/agent-not-ready
+    effect: NoSchedule
+  - key: node.cilium.io/agent-not-ready
+    effect: NoExecute
+
+shared-secrets:
+  tolerations:
+    - key: CriticalAddonsOnly
+      value: "true"
+      effect: NoSchedule
+    # - key: node.kubernetes.io/not-ready
+    #   effect: NoSchedule
+    # - key: node.cilium.io/agent-not-ready
+    #   effect: NoSchedule
+    # - key: node.cilium.io/agent-not-ready
+    #   effect: NoExecute
+
+upgradeCheck:
+  tolerations:
+    - key: CriticalAddonsOnly
+      value: "true"
+      effect: NoSchedule
